@@ -56,7 +56,7 @@ conda install conda-forge::chktex
 
 # Install Python package requirements
 pip install -r requirements.txt
-</code></pre>
+```
 
 Installation usually takes no more than one hour.
 
