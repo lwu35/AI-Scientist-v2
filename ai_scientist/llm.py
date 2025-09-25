@@ -79,7 +79,23 @@ def get_batch_responses_from_llm(
     if msg_history is None:
         msg_history = []
 
-    if "gpt" in model:
+    if "gpt-5" in model or "gpt-5-mini" in model:
+        # GPT-5 and GPT-5-mini use max_completion_tokens instead of max_tokens
+        # GPT-5 and GPT-5-mini only support temperature=1 (default)
+        new_msg_history = msg_history + [{"role": "user", "content": msg}]
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_message},
+                *new_msg_history,
+            ],
+            temperature=1,  # GPT-5 and GPT-5-mini only support temperature=1
+            max_completion_tokens=MAX_NUM_TOKENS,
+            n=n_responses,
+            stop=None,
+            seed=0,
+        )
+    elif "gpt" in model:
         new_msg_history = msg_history + [{"role": "user", "content": msg}]
         response = client.chat.completions.create(
             model=model,
@@ -178,7 +194,22 @@ def get_batch_responses_from_llm(
 
 @track_token_usage
 def make_llm_call(client, model, temperature, system_message, prompt):
-    if "gpt" in model:
+    if "gpt-5" in model or "gpt-5-mini" in model:
+        # GPT-5 and GPT-5-mini use max_completion_tokens instead of max_tokens
+        # GPT-5 and GPT-5-mini only support temperature=1 (default)
+        return client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_message},
+                *prompt,
+            ],
+            temperature=1,  # GPT-5 and GPT-5-mini only support temperature=1
+            max_completion_tokens=MAX_NUM_TOKENS,
+            n=1,
+            stop=None,
+            seed=0,
+        )
+    elif "gpt" in model:
         return client.chat.completions.create(
             model=model,
             messages=[
@@ -426,6 +457,9 @@ def create_client(model) -> tuple[Any, str]:
         client_model = model.split("/")[-1]
         print(f"Using Vertex AI with model {client_model}.")
         return anthropic.AnthropicVertex(), client_model
+    elif "gpt-5" in model or "gpt-5-mini" in model:
+        print(f"Using OpenAI API with model {model} (GPT-5/GPT-5-mini: max_completion_tokens + temperature=1).")
+        return openai.OpenAI(), model
     elif "gpt" in model:
         print(f"Using OpenAI API with model {model}.")
         return openai.OpenAI(), model

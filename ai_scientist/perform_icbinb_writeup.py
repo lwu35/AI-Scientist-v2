@@ -45,12 +45,140 @@ def remove_accents_and_clean(s):
 def compile_latex(cwd, pdf_file, timeout=30):
     print("GENERATING LATEX")
 
+    # PERMANENT FIX: Clean up stale bibliography files and ensure proper document structure
+    template_file = os.path.join(cwd, "template.tex")
+    references_bib = os.path.join(cwd, "references.bib")
+    
+    # Remove stale references.bib to force regeneration from filecontents
+    if os.path.exists(references_bib):
+        print("🔧 Removing stale references.bib to force regeneration")
+        os.remove(references_bib)
+    
+    if os.path.exists(template_file):
+        with open(template_file, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+        
+        content_modified = False
+        
+        # Fix document class issues
+        if 'iclr2025_workshop.cls' in content:
+            print("🔧 Fixing document class: iclr2025_workshop.cls → article + iclr2025.sty")
+            content = content.replace('\\documentclass{iclr2025_workshop}', '\\documentclass[10pt,twocolumn]{article}\n\\usepackage{iclr2025}')
+            content_modified = True
+        
+        # Fix missing style file references
+        if 'iclr2025_conference.sty' in content:
+            print("🔧 Fixing style file: iclr2025_conference.sty → iclr2025.sty")
+            content = content.replace('\\usepackage{iclr2025_conference}', '\\usepackage{iclr2025}')
+            content_modified = True
+        
+        # Fix graphics path for figures
+        if '\\graphicspath{{./figures/}}' in content:
+            print("🔧 Fixing graphics path: ./figures/ → ../figures/")
+            content = content.replace('\\graphicspath{{./figures/}}', '\\graphicspath{{../figures/}}')
+            content_modified = True
+        elif '\\graphicspath{{figures/}}' in content:
+            print("🔧 Fixing graphics path: figures/ → ../figures/")
+            content = content.replace('\\graphicspath{{figures/}}', '\\graphicspath{{../figures/}}')
+            content_modified = True
+        
+        # Check if document ends properly
+        if not content.strip().endswith('\\end{document}'):
+            print("🔧 Adding missing \\end{document} to LaTeX file")
+            content = content.rstrip() + '\n\n\\end{document}\n'
+            content_modified = True
+        
+        # Add missing packages for common LaTeX commands
+        missing_packages = []
+        if '\\captionof' in content and '\\usepackage{caption}' not in content:
+            missing_packages.append('\\usepackage{caption}')
+        if '\\textcolor' in content and '\\usepackage{xcolor}' not in content:
+            missing_packages.append('\\usepackage{xcolor}')
+        
+        if missing_packages:
+            # Find the last \usepackage line and insert after it
+            lines = content.split('\n')
+            last_usepackage_idx = -1
+            for i, line in enumerate(lines):
+                if line.strip().startswith('\\usepackage'):
+                    last_usepackage_idx = i
+            
+            if last_usepackage_idx >= 0:
+                for package in missing_packages:
+                    lines.insert(last_usepackage_idx + 1, package)
+                    last_usepackage_idx += 1
+                    print(f"🔧 Adding missing package: {package}")
+                    content_modified = True
+                content = '\n'.join(lines)
+
+        # PERMANENT FIX: Handle overly long lines in verbatim blocks
+        lines = content.split('\n')
+        in_verbatim = False
+        fixed_lines = []
+        
+        for line in lines:
+            if '\\begin{verbatim}' in line:
+                in_verbatim = True
+            elif '\\end{verbatim}' in line:
+                in_verbatim = False
+            elif in_verbatim and len(line) > 80:  # If line is too long in verbatim
+                original_line = line
+                # Shorten common problematic phrases
+                line = line.replace('for the full listing.>', 'for full listing.>')
+                line = line.replace('see best node object for the full listing', 'see best node object for full listing')
+                line = line.replace('Code omitted for brevity; see', 'Code omitted; see')
+                if line != original_line:
+                    print(f"🔧 Shortened long verbatim line: {len(original_line)} -> {len(line)} chars")
+                    content_modified = True
+            
+            fixed_lines.append(line)
+        
+        # Write back the fixed content if any changes were made
+        if content_modified:
+            fixed_content = '\n'.join(fixed_lines)
+            with open(template_file, 'w', encoding='utf-8') as f:
+                f.write(fixed_content)
+
+    # Install missing LaTeX packages if needed
+    missing_packages = ["filecontents", "grfext"]
+    for package in missing_packages:
+        try:
+            result = subprocess.run(
+                ["tlmgr", "list", "--only-installed", package],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode != 0:  # Package not installed
+                print(f"📦 Installing missing LaTeX package: {package}")
+                subprocess.run(
+                    ["tlmgr", "install", package],
+                    capture_output=True, text=True, timeout=60
+                )
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
+            # If tlmgr is not available or fails, continue anyway
+            pass
+
     commands = [
         ["pdflatex", "-interaction=nonstopmode", "template.tex"],
         ["bibtex", "template"],
         ["pdflatex", "-interaction=nonstopmode", "template.tex"],
         ["pdflatex", "-interaction=nonstopmode", "template.tex"],
     ]
+
+    # Ensure PATH includes common LaTeX installation directories
+    env = os.environ.copy()
+    latex_paths = [
+        "/Users/lirenw/Library/TinyTeX/bin/universal-darwin",
+        "/usr/local/texlive/2023/bin/universal-darwin",
+        "/usr/local/texlive/2024/bin/universal-darwin",
+        "/usr/local/bin",
+        "/opt/homebrew/bin"
+    ]
+    
+    current_path = env.get("PATH", "")
+    for latex_path in latex_paths:
+        if latex_path not in current_path and os.path.exists(latex_path):
+            current_path = f"{latex_path}:{current_path}"
+    env["PATH"] = current_path
 
     for command in commands:
         try:
@@ -61,6 +189,7 @@ def compile_latex(cwd, pdf_file, timeout=30):
                 stderr=subprocess.PIPE,
                 text=True,
                 timeout=timeout,
+                env=env,
             )
             print("Standard Output:\n", result.stdout)
             print("Standard Error:\n", result.stderr)
@@ -913,6 +1042,17 @@ def perform_writeup(
                 aggregator_code = fa.read()
         else:
             aggregator_code = "No aggregator script found."
+
+        # Fix bibliography reference to prevent citation issues (safety measure)
+        writeup_file = osp.join(latex_folder, "template.tex")
+        if osp.exists(writeup_file):
+            with open(writeup_file, 'r') as f:
+                content = f.read()
+            if '\\bibliography{iclr2025}' in content:
+                print("🔧 Fixing bibliography reference: iclr2025 → references")
+                content = content.replace('\\bibliography{iclr2025}', '\\bibliography{references}')
+                with open(writeup_file, 'w') as f:
+                    f.write(content)
 
         if no_writing:
             compile_latex(latex_folder, pdf_file)

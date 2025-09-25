@@ -349,7 +349,25 @@ def overall_summarize(journals):
                 total=len(list(journals)),
             )
         )
-        draft_summary, baseline_summary, research_summary, ablation_summary = results
+        
+        # Handle variable number of stages - ensure we have exactly 4 results
+        # Initialize with None values
+        draft_summary = None
+        baseline_summary = None
+        research_summary = None
+        ablation_summary = None
+        
+        # Map results based on their position
+        for i, result in enumerate(results):
+            if i == 0:
+                draft_summary = result
+            elif i == 1:
+                baseline_summary = result
+            elif i == 2:
+                research_summary = result
+            elif i == 3:
+                ablation_summary = result
+            # Ignore any additional stages beyond the expected 4
 
     return draft_summary, baseline_summary, research_summary, ablation_summary
 
