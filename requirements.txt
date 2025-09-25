@@ -27,3 +27,5 @@ jsonschema
 omegaconf
 botocore
 boto3
+# Process management (required for experiment cleanup)
+psutil
