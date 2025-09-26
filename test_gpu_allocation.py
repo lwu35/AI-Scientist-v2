@@ -17,13 +17,20 @@ import os
 import sys
 import time
 import json
-import torch
 import argparse
 import subprocess
 import multiprocessing as mp
 from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
+
+# Import torch after multiprocessing setup to avoid CUDA issues
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+    print("⚠️ PyTorch not available - GPU tests will be skipped")
 
 def get_gpu_info():
     """Get detailed GPU information"""
@@ -52,17 +59,20 @@ def get_gpu_info():
     
     # Check PyTorch CUDA
     try:
-        print(f"\n🐍 PyTorch CUDA Status:")
-        print(f"  CUDA Available: {torch.cuda.is_available()}")
-        print(f"  CUDA Version: {torch.version.cuda}")
-        print(f"  Device Count: {torch.cuda.device_count()}")
-        
-        if torch.cuda.is_available():
-            for i in range(torch.cuda.device_count()):
-                props = torch.cuda.get_device_properties(i)
-                print(f"  GPU {i}: {props.name}")
-                print(f"    Memory: {props.total_memory / 1024**3:.1f}GB")
-                print(f"    Compute Capability: {props.major}.{props.minor}")
+        if TORCH_AVAILABLE:
+            print(f"\n🐍 PyTorch CUDA Status:")
+            print(f"  CUDA Available: {torch.cuda.is_available()}")
+            print(f"  CUDA Version: {torch.version.cuda}")
+            print(f"  Device Count: {torch.cuda.device_count()}")
+            
+            if torch.cuda.is_available():
+                for i in range(torch.cuda.device_count()):
+                    props = torch.cuda.get_device_properties(i)
+                    print(f"  GPU {i}: {props.name}")
+                    print(f"    Memory: {props.total_memory / 1024**3:.1f}GB")
+                    print(f"    Compute Capability: {props.major}.{props.minor}")
+        else:
+            print(f"\n🐍 PyTorch CUDA Status: Not Available")
     except Exception as e:
         print(f"❌ PyTorch CUDA error: {e}")
     
@@ -74,12 +84,15 @@ def simulate_gpu_workload(gpu_id, duration=30, memory_mb=512):
         # Set the specific GPU
         os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
         
+        # Import torch after setting CUDA_VISIBLE_DEVICES in the worker process
+        import torch
+        
         if not torch.cuda.is_available():
             return {"status": "no_cuda", "gpu_id": gpu_id, "error": "CUDA not available"}
         
         device = torch.device(f'cuda:0')  # Always 0 since we set CUDA_VISIBLE_DEVICES
         
-        print(f"🔥 Worker {os.getpid()}: Starting GPU {gpu_id} workload...")
+        print(f"🔥 Worker {os.getpid()}: Starting GPU {gpu_id} workload (spawn method)...")
         
         # Allocate GPU memory
         size = int((memory_mb * 1024 * 1024) / 4)  # 4 bytes per float32
@@ -143,6 +156,10 @@ def test_gpu_allocation_stress(num_workers=None, duration=60, memory_per_worker=
     """Test GPU allocation under stress with multiple workers"""
     print(f"\n🧪 GPU Allocation Stress Test")
     print("=" * 60)
+    
+    if not TORCH_AVAILABLE:
+        print("❌ PyTorch not available - skipping GPU stress test")
+        return False
     
     # Determine number of workers and GPUs
     available_gpus = list(range(torch.cuda.device_count())) if torch.cuda.is_available() else []
@@ -248,6 +265,10 @@ def test_launch_scientist_gpu_allocation():
     print(f"\n🔬 Testing launch_scientist_bfts.py GPU Allocation")
     print("=" * 60)
     
+    if not TORCH_AVAILABLE:
+        print("❌ PyTorch not available - skipping launch_scientist tests")
+        return True
+        
     if not torch.cuda.is_available():
         print("❌ No GPUs available - skipping launch_scientist tests")
         return True
@@ -381,6 +402,15 @@ def cleanup_test_artifacts():
                 print(f"  Failed to remove {test_dir}: {e}")
 
 def main():
+    # Fix CUDA multiprocessing issue by setting spawn method
+    try:
+        mp.set_start_method('spawn', force=True)
+        print("🔧 Set multiprocessing start method to 'spawn' for CUDA compatibility")
+    except RuntimeError:
+        # Already set, which is fine
+        current_method = mp.get_start_method()
+        print(f"🔧 Multiprocessing start method already set to: {current_method}")
+    
     parser = argparse.ArgumentParser(description="GPU Allocation Stress Test for AI Scientist")
     parser.add_argument("--workers", type=int, help="Number of parallel workers (default: 2 * num_gpus)")
     parser.add_argument("--duration", type=int, default=60, help="Duration of each worker test in seconds")

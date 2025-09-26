@@ -6,6 +6,14 @@ import os
 from queue import Queue
 import logging
 import humanize
+import multiprocessing
+
+# Fix CUDA multiprocessing compatibility
+try:
+    multiprocessing.set_start_method('spawn', force=True)
+except RuntimeError:
+    # Already set, which is fine
+    pass
 from .backend import FunctionSpec, compile_prompt_to_md, query
 from .interpreter import ExecutionResult
 from .journal import Journal, Node
