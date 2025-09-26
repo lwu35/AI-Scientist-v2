@@ -328,26 +328,35 @@ def test_launch_scientist_gpu_allocation():
             end_time = time.time()
             elapsed = end_time - start_time
             
-            # Check for GPU-related messages in output
+            # Check for GPU-related messages and errors in output
             gpu_messages = []
+            error_messages = []
             for line in stdout.split('\n'):
                 if any(keyword in line.lower() for keyword in ['gpu', 'cuda', 'device']):
                     gpu_messages.append(line.strip())
+                if any(keyword in line for keyword in ['Error', 'Exception', 'Traceback', 'Failed', 'ImportError', 'ModuleNotFoundError']):
+                    error_messages.append(line.strip())
             
             results[config['name']] = {
                 "success": process.returncode == 0,
                 "elapsed": elapsed,
                 "return_code": process.returncode,
                 "gpu_messages": gpu_messages[:10],  # First 10 GPU-related messages
-                "output_length": len(stdout)
+                "error_messages": error_messages[:10],  # First 10 error messages
+                "output_length": len(stdout),
+                "full_output": stdout  # Store full output for debugging
             }
             
             status = "✅ SUCCESS" if process.returncode == 0 else f"❌ FAILED (code {process.returncode})"
             print(f"Result: {status} in {elapsed:.1f}s")
             
-            if gpu_messages:
+            if process.returncode != 0 and error_messages:
+                print("Error messages:")
+                for msg in error_messages[:3]:  # Show first 3 errors
+                    print(f"  {msg}")
+            elif gpu_messages:
                 print("GPU-related messages:")
-                for msg in gpu_messages[:5]:  # Show first 5
+                for msg in gpu_messages[:3]:  # Show first 3
                     print(f"  {msg}")
             
         except subprocess.TimeoutExpired:
@@ -371,15 +380,40 @@ def test_launch_scientist_gpu_allocation():
     print(f"\n📋 Launch Scientist GPU Test Summary:")
     print("-" * 40)
     successful_configs = 0
+    failed_configs = []
+    
     for name, result in results.items():
         status = "✅ PASS" if result["success"] else "❌ FAIL"
         elapsed = result.get("elapsed", "N/A")
         print(f"{name}: {status} ({elapsed}s)")
         if result["success"]:
             successful_configs += 1
+        else:
+            failed_configs.append((name, result))
     
     success_rate = successful_configs / len(test_configs)
     print(f"\nOverall Success Rate: {success_rate:.1%}")
+    
+    # Save detailed failure logs if there are failures
+    if failed_configs:
+        print(f"\n🔍 Saving detailed failure logs...")
+        log_file = f"launch_scientist_failures_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        with open(log_file, 'w') as f:
+            f.write("Launch Scientist GPU Test Failure Details\n")
+            f.write("=" * 50 + "\n\n")
+            
+            for name, result in failed_configs:
+                f.write(f"Configuration: {name}\n")
+                f.write(f"Return Code: {result.get('return_code', 'Unknown')}\n")
+                f.write(f"Elapsed Time: {result.get('elapsed', 'Unknown')}s\n")
+                f.write(f"Output Length: {result.get('output_length', 0)} characters\n")
+                f.write("\nFull Output:\n")
+                f.write("-" * 30 + "\n")
+                f.write(result.get('full_output', 'No output captured'))
+                f.write("\n" + "=" * 50 + "\n\n")
+        
+        print(f"   Detailed logs saved to: {log_file}")
+        print(f"   Run 'python debug_launch_scientist.py' for interactive debugging")
     
     return success_rate >= 0.5  # 50% success rate (some configs may legitimately fail)
 
