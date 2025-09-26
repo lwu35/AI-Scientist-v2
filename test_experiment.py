@@ -266,10 +266,10 @@ def run_minimal_experiment_test(ideas_file="ai_scientist/ideas/i_cant_believe_it
         "--num_cite_rounds", "5",  # Reduced citations
         "--writeup-retries", "1",  # Single retry
         "--attempt_id", "999",
-        "--model_writeup", "gpt-5-mini",  # Use GPT-5 for paper writing
-        "--model_citation", "gpt-5-mini",  # Use GPT-5 for citation gathering
-        "--model_review", "gpt-5-mini",  # Use GPT-5 for review
-        "--model_agg_plots", "gpt-5-mini"  # Use GPT-5 for plot aggregation
+        "--model_writeup", "gpt-5",  # Use GPT-5 for paper writing
+        "--model_citation", "gpt-5",  # Use GPT-5 for citation gathering
+        "--model_review", "gpt-5",  # Use GPT-5 for review
+        "--model_agg_plots", "gpt-5"  # Use GPT-5 for plot aggregation
     ]
     
     print(f"Command: {' '.join(cmd)}")
