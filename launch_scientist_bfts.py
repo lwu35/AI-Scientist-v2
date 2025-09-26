@@ -6,6 +6,7 @@ import torch
 import os
 import re
 import sys
+import signal
 from datetime import datetime
 from ai_scientist.llm import create_client
 
@@ -23,6 +24,14 @@ from ai_scientist.perform_icbinb_writeup import (
     perform_writeup as perform_icbinb_writeup,
     gather_citations,
 )
+
+# Import LaTeX validation system
+try:
+    from ai_scientist.utils.latex_helper import LaTeXPackageManager, get_writeup_constraints_prompt
+    LATEX_VALIDATION_AVAILABLE = True
+except ImportError:
+    print("⚠️  LaTeX validation system not available - using basic compilation")
+    LATEX_VALIDATION_AVAILABLE = False
 from ai_scientist.perform_llm_review import perform_review, load_paper
 from ai_scientist.perform_vlm_review import perform_imgs_cap_ref_review
 from ai_scientist.utils.token_tracker import token_tracker
@@ -30,6 +39,44 @@ from ai_scientist.utils.token_tracker import token_tracker
 
 def print_time():
     print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+
+def cleanup_processes():
+    """Clean up all child processes"""
+    print("Start cleaning up processes")
+    try:
+        import psutil
+        # Get the current process and all its children
+        current_process = psutil.Process()
+        children = current_process.children(recursive=True)
+
+        # First try graceful termination
+        for child in children:
+            try:
+                child.send_signal(signal.SIGTERM)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+        # Wait briefly for processes to terminate
+        gone, alive = psutil.wait_procs(children, timeout=3)
+
+        # If any processes remain, force kill them
+        for process in alive:
+            try:
+                process.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+        print(f"Cleaned up {len(gone)} processes, force killed {len(alive)} processes")
+    except Exception as e:
+        print(f"Error during process cleanup: {e}")
+
+
+def signal_handler(signum, frame):
+    """Handle interruption signals gracefully"""
+    print(f"\n🛑 Received signal {signum}. Cleaning up...")
+    cleanup_processes()
+    sys.exit(1)
 
 
 def save_token_tracker(idea_dir):
@@ -122,13 +169,96 @@ def parse_arguments():
         action="store_true",
         help="If set, skip the review process",
     )
+    parser.add_argument(
+        "--gpu_ids",
+        type=str,
+        default=None,
+        help="Comma-separated list of GPU IDs to use (e.g., '0,1,2'). If not specified, all available GPUs will be used.",
+    )
+    parser.add_argument(
+        "--force_cpu",
+        action="store_true",
+        help="Force CPU-only mode, even if GPUs are available",
+    )
+    parser.add_argument(
+        "--disable_latex_validation",
+        action="store_true",
+        help="Disable LaTeX validation and auto-fixing features",
+    )
     return parser.parse_args()
 
 
+def validate_gpu_setup():
+    """Validate GPU setup and provide detailed information"""
+    print("\n🔍 GPU Setup Validation:")
+    print("-" * 40)
+    
+    # Check CUDA_VISIBLE_DEVICES
+    cuda_env = os.environ.get("CUDA_VISIBLE_DEVICES", "Not set")
+    print(f"CUDA_VISIBLE_DEVICES: {cuda_env}")
+    
+    # Check nvidia-smi
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index,name,memory.total", "--format=csv,noheader"],
+            capture_output=True, text=True, check=True
+        )
+        print("nvidia-smi GPUs:")
+        for line in result.stdout.strip().split("\n"):
+            if line.strip():
+                print(f"  {line}")
+    except Exception as e:
+        print(f"nvidia-smi error: {e}")
+    
+    # Check torch CUDA
+    try:
+        torch_available = torch.cuda.is_available()
+        torch_count = torch.cuda.device_count()
+        print(f"PyTorch CUDA available: {torch_available}")
+        print(f"PyTorch GPU count: {torch_count}")
+        if torch_count > 0:
+            for i in range(torch_count):
+                try:
+                    name = torch.cuda.get_device_name(i)
+                    print(f"  GPU {i}: {name}")
+                except:
+                    print(f"  GPU {i}: <name unavailable>")
+    except Exception as e:
+        print(f"PyTorch CUDA error: {e}")
+    
+    print("-" * 40)
+
+
 def get_available_gpus(gpu_ids=None):
+    """Get available GPUs using the same method as BFTS system"""
     if gpu_ids is not None:
         return [int(gpu_id) for gpu_id in gpu_ids.split(",")]
-    return list(range(torch.cuda.device_count()))
+    
+    # Use the same detection method as parallel_agent.py
+    import subprocess
+    try:
+        # First try using nvidia-smi (same as BFTS)
+        nvidia_smi = subprocess.run(
+            ["nvidia-smi", "--query-gpu=gpu_name", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        gpus = nvidia_smi.stdout.strip().split("\n")
+        gpu_count = len(gpus)
+        return list(range(gpu_count))
+    except (subprocess.SubprocessError, FileNotFoundError):
+        # Fallback to torch method
+        try:
+            return list(range(torch.cuda.device_count()))
+        except:
+            # Final fallback to environment variable
+            cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
+            if cuda_visible_devices:
+                devices = [d for d in cuda_visible_devices.split(",") if d and d != "-1"]
+                return list(range(len(devices)))
+            return []
 
 
 def find_pdf_path_for_review(idea_dir):
@@ -180,13 +310,41 @@ def redirect_stdout_stderr_to_file(log_file_path):
 
 
 if __name__ == "__main__":
+    # Set up signal handlers for graceful shutdown
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     args = parse_arguments()
     os.environ["AI_SCIENTIST_ROOT"] = os.path.dirname(os.path.abspath(__file__))
     print(f"Set AI_SCIENTIST_ROOT to {os.environ['AI_SCIENTIST_ROOT']}")
 
-    # Check available GPUs and adjust parallel processes if necessary
-    available_gpus = get_available_gpus()
-    print(f"Using GPUs: {available_gpus}")
+    # Display LaTeX validation status
+    if LATEX_VALIDATION_AVAILABLE and not args.disable_latex_validation:
+        print("🔧 LaTeX validation system: ENABLED")
+        print("   - Pre-writeup constraint generation")
+        print("   - Post-writeup validation checks") 
+        print("   - Automatic issue fixing during compilation")
+    else:
+        reason = "disabled by --disable_latex_validation" if args.disable_latex_validation else "not available"
+        print(f"⚠️  LaTeX validation system: DISABLED ({reason})")
+
+    # Validate GPU setup before proceeding
+    validate_gpu_setup()
+
+    # Check available GPUs and configure GPU usage
+    if args.force_cpu:
+        print("🖥️  Force CPU mode enabled - disabling GPU usage")
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+        available_gpus = []
+    else:
+        available_gpus = get_available_gpus(args.gpu_ids)
+        if available_gpus:
+            print(f"🎮 Using GPUs: {available_gpus}")
+            # Set CUDA_VISIBLE_DEVICES for the entire process tree
+            os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, available_gpus))
+        else:
+            print("🖥️  No GPUs detected - falling back to CPU mode")
+            os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
     with open(args.load_ideas, "r") as f:
         ideas = json.load(f)
@@ -247,10 +405,19 @@ if __name__ == "__main__":
         json.dump(ideas[args.idea_idx], f, indent=4)
 
     config_path = "bfts_config.yaml"
+    
+    # Prepare GPU information for BFTS system
+    gpu_info = {
+        "available_gpus": available_gpus,
+        "force_cpu": args.force_cpu,
+        "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES", "")
+    }
+    
     idea_config_path = edit_bfts_config_file(
         config_path,
         idea_dir,
         idea_path_json,
+        gpu_info,
     )
 
     perform_experiments_bfts(idea_config_path)
@@ -291,6 +458,28 @@ if __name__ == "__main__":
             else:
                 print("✅ Bibliography reference already correct")
         
+        # Pre-writeup LaTeX validation and constraints
+        if LATEX_VALIDATION_AVAILABLE and not args.disable_latex_validation:
+            print("\n🔍 Performing pre-writeup LaTeX validation...")
+            try:
+                constraints_prompt = get_writeup_constraints_prompt(idea_dir)
+                print("📋 Generated LaTeX constraints for writeup models:")
+                print("   - Available figures and citations identified")
+                print("   - Validation rules prepared")
+                print("   - Auto-fix system ready")
+                
+                # Optionally save constraints to a file for debugging
+                constraints_file = osp.join(idea_dir, "latex_constraints.txt")
+                with open(constraints_file, 'w') as f:
+                    f.write(constraints_prompt)
+                print(f"   - Constraints saved to: {constraints_file}")
+                
+            except Exception as e:
+                print(f"⚠️  LaTeX validation setup failed: {e}")
+                print("   Proceeding with standard writeup process")
+        else:
+            print("⚠️  LaTeX validation not available - using standard process")
+        
         for attempt in range(args.writeup_retries):
             print(f"Writeup attempt {attempt+1} of {args.writeup_retries}")
             if args.writeup_type == "normal":
@@ -312,6 +501,37 @@ if __name__ == "__main__":
 
         if not writeup_success:
             print("Writeup process did not complete successfully after all retries.")
+        else:
+            # Post-writeup LaTeX validation
+            if LATEX_VALIDATION_AVAILABLE and not args.disable_latex_validation:
+                print("\n🔍 Performing post-writeup LaTeX validation...")
+                try:
+                    manager = LaTeXPackageManager()
+                    latex_file = osp.join(idea_dir, "latex", "template.tex")
+                    
+                    if osp.exists(latex_file):
+                        issues = manager.validate_latex_file(latex_file)
+                        total_issues = sum(len(issue_list) for issue_list in issues.values() if isinstance(issue_list, list))
+                        
+                        if total_issues > 0:
+                            print(f"⚠️  Found {total_issues} LaTeX issues in generated writeup:")
+                            if issues['missing_figures']:
+                                print(f"   📷 Missing figures: {len(issues['missing_figures'])}")
+                            if issues['missing_style_files']:
+                                print(f"   📄 Missing style files: {len(issues['missing_style_files'])}")
+                            if issues['undefined_labels']:
+                                print(f"   🏷️  Undefined labels: {len(issues['undefined_labels'])}")
+                            if issues['undefined_citations']:
+                                print(f"   📚 Undefined citations: {len(issues['undefined_citations'])}")
+                            
+                            print("   🔧 Auto-fix will be applied during compilation")
+                        else:
+                            print("✅ LaTeX validation passed - no issues found!")
+                    
+                except Exception as e:
+                    print(f"⚠️  Post-writeup validation failed: {e}")
+            
+            print("✅ Writeup process completed successfully!")
 
     save_token_tracker(idea_dir)
 
@@ -332,45 +552,7 @@ if __name__ == "__main__":
                 json.dump(review_img_cap_ref, f, indent=4)
             print("Paper review completed.")
 
-    print("Start cleaning up processes")
-    # Kill all mp and torch processes associated with this experiment
-    import psutil
-    import signal
-
-    # Get the current process and all its children
-    current_process = psutil.Process()
-    children = current_process.children(recursive=True)
-
-    # First try graceful termination
-    for child in children:
-        try:
-            child.send_signal(signal.SIGTERM)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-
-    # Wait briefly for processes to terminate
-    gone, alive = psutil.wait_procs(children, timeout=3)
-
-    # If any processes remain, force kill them
-    for process in alive:
-        try:
-            process.kill()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-
-    # Additional cleanup: find any orphaned processes containing specific keywords
-    keywords = ["python", "torch", "mp", "bfts", "experiment"]
-    for proc in psutil.process_iter(["name", "cmdline"]):
-        try:
-            # Check both process name and command line arguments
-            cmdline = " ".join(proc.cmdline()).lower()
-            if any(keyword in cmdline for keyword in keywords):
-                proc.send_signal(signal.SIGTERM)
-                proc.wait(timeout=3)
-                if proc.is_running():
-                    proc.kill()
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
-            continue
+    cleanup_processes()
 
     # Finally, terminate the current process
     # current_process.send_signal(signal.SIGTERM)

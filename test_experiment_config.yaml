@@ -18,7 +18,7 @@ exp_name: test_run # a random experiment name will be generated if not provided
 
 # settings for code execution - REDUCED TIMEOUT FOR TESTING
 exec:
-  timeout: 600 # 10 minutes instead of 1 hour
+  timeout: 300 # 5 minutes instead of 1 hour
   agent_file_name: runfile.py
   format_tb_ipython: False
 

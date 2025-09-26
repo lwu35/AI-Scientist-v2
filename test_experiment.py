@@ -251,7 +251,160 @@ def dry_run_test(ideas_file="ai_scientist/ideas/i_cant_believe_its_not_better.js
             shutil.rmtree(idea_dir)
         return False
 
-def run_minimal_experiment_test(ideas_file="ai_scientist/ideas/i_cant_believe_its_not_better.json", idea_idx=0, timeout_minutes=120):
+def run_ultra_fast_experiment_test(ideas_file="ai_scientist/ideas/i_cant_believe_its_not_better.json", idea_idx=0):
+    """Run an ultra-fast experiment to test basic pipeline functionality"""
+    print(f"\n⚡ Running Ultra-Fast Experiment Test")
+    print("-" * 40)
+    print("🚀 Starting ultra-fast experiment (2-min timeout per stage)...")
+
+    # Construct ultra-fast experiment command
+    cmd = [
+        "python", "launch_scientist_bfts.py",
+        "--load_ideas", ideas_file,
+        "--idea_idx", str(idea_idx),
+        "--writeup-type", "icbinb",  # Shorter 4-page format
+        "--num_cite_rounds", "3",  # Minimal citations
+        "--writeup-retries", "1",  # Single retry
+        "--attempt_id", "888",
+        "--model_writeup", "gpt-4o-2024-11-20",  # Faster than O1
+        "--model_citation", "gpt-4o-2024-11-20", 
+        "--model_review", "gpt-4o-2024-11-20",
+        "--model_agg_plots", "gpt-4o-2024-11-20",
+        "--force_cpu"  # Use CPU for ultra-fast testing to avoid GPU setup issues
+    ]
+    
+    # Use ultra-fast config
+    import shutil
+    shutil.copy("ultra_fast_test_config.yaml", "bfts_config.yaml")
+    
+    print(f"Command: {' '.join(cmd)}")
+    print(f"⏱️ This should complete within 30 minutes...")
+    
+    try:
+        # Run the experiment with real-time output
+        print("📊 Starting experiment with real-time logging...")
+        print("=" * 60)
+        
+        # Create log file for this experiment
+        log_file = f"ultra_fast_experiment_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        print(f"📝 Logging to: {log_file}")
+        
+        # Start the process without capturing output initially
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
+        )
+        
+        # Monitor the process with timeout
+        import time
+        start_time = time.time()
+        timeout_seconds = 1800  # 30 minutes for ultra-fast
+        
+        output_lines = []
+        with open(log_file, 'w') as log:
+            log.write(f"Ultra-Fast Experiment Log - Started at {datetime.now()}\n")
+            log.write(f"Command: {' '.join(cmd)}\n")
+            log.write("=" * 80 + "\n\n")
+            
+            while True:
+                # Check if process has finished
+                if process.poll() is not None:
+                    # Process finished, get remaining output
+                    remaining_output = process.stdout.read()
+                    if remaining_output:
+                        print(remaining_output, end='')
+                        output_lines.append(remaining_output)
+                        log.write(remaining_output)
+                        log.flush()
+                    break
+                
+                # Check for timeout
+                elapsed = time.time() - start_time
+                if elapsed > timeout_seconds:
+                    timeout_msg = f"\n⏰ Timeout reached after {elapsed:.1f} seconds\n"
+                    print(timeout_msg)
+                    log.write(timeout_msg)
+                    log.write("🔪 Terminating process...\n")
+                    log.flush()
+                    print("🔪 Terminating process...")
+                    process.terminate()
+                    time.sleep(5)  # Give it time to terminate gracefully
+                    if process.poll() is None:
+                        print("💀 Force killing process...")
+                        log.write("💀 Force killing process...\n")
+                        process.kill()
+                    raise subprocess.TimeoutExpired(cmd, timeout_seconds)
+                
+                # Read output line by line
+                line = process.stdout.readline()
+                if line:
+                    print(line, end='')
+                    output_lines.append(line)
+                    log.write(line)
+                    
+                    # Show progress indicators
+                    if "Stage" in line or "Experiment" in line or "Writing" in line or "Plotting" in line:
+                        elapsed_min = elapsed / 60
+                        progress_msg = f"  ⏱️ [{elapsed_min:.1f}min elapsed]\n"
+                        print(progress_msg, end='')
+                        log.write(progress_msg)
+                    
+                    log.flush()  # Ensure we write to disk regularly
+                
+                time.sleep(0.1)  # Small delay to prevent excessive CPU usage
+        
+        # Create a result-like object for compatibility
+        class Result:
+            def __init__(self, returncode, stdout):
+                self.returncode = returncode
+                self.stdout = stdout
+                self.stderr = ""
+        
+        result = Result(process.returncode, ''.join(output_lines))
+        
+        if result.returncode == 0:
+            print("✅ Ultra-fast experiment completed successfully!")
+            print("🎉 Basic pipeline functionality verified")
+            return True
+        else:
+            print(f"❌ Ultra-fast experiment failed with return code: {result.returncode}")
+            return False
+    
+    except subprocess.TimeoutExpired:
+        print("❌ Ultra-fast experiment timed out after 30 minutes")
+        print(f"📄 Log file saved: {log_file}")
+        
+        # Show last few lines of the log to help debug
+        try:
+            with open(log_file, 'r') as f:
+                lines = f.readlines()
+                if lines:
+                    print("\n🔍 Last 10 lines from log:")
+                    print("-" * 50)
+                    for line in lines[-10:]:
+                        print(line.rstrip())
+                    print("-" * 50)
+        except Exception as e:
+            print(f"⚠️ Could not read log file: {e}")
+        
+        print("🔍 Check the full log file to see where the experiment got stuck")
+        return False
+    except Exception as e:
+        print(f"❌ Ultra-fast experiment failed with error: {str(e)}")
+        return False
+    finally:
+        # Restore original config
+        try:
+            shutil.copy("test_experiment_config.yaml", "bfts_config.yaml")
+        except:
+            pass
+
+
+def run_minimal_experiment_test(ideas_file="ai_scientist/ideas/i_cant_believe_its_not_better.json", idea_idx=0, timeout_minutes=240):
     """Run a minimal experiment to test the full pipeline"""
     print(f"\n🧪 Running Minimal Experiment Test")
     print("-" * 40)
@@ -404,6 +557,7 @@ def main():
     # Parse arguments properly
     parser = argparse.ArgumentParser(description="Test AI Scientist experiment setup")
     parser.add_argument("--minimal", action="store_true", help="Run minimal experiment test")
+    parser.add_argument("--ultra-fast", action="store_true", help="Run ultra-fast test (2-minute timeout per stage)")
     parser.add_argument("ideas_file", nargs="?", default="ai_scientist/ideas/i_cant_believe_its_not_better.json", help="Path to ideas JSON file")
     parser.add_argument("idea_idx", nargs="?", type=int, default=0, help="Index of idea to test")
     
@@ -412,10 +566,15 @@ def main():
     ideas_file = args.ideas_file
     idea_idx = args.idea_idx
     minimal_test = args.minimal
+    ultra_fast_test = args.ultra_fast
     
     print(f"🎯 Testing with: {ideas_file}, idea index: {idea_idx}")
-    if minimal_test:
+    if ultra_fast_test:
+        print("⚡ Running ultra-fast experiment test")
+        return run_ultra_fast_experiment_test(ideas_file, idea_idx)
+    elif minimal_test:
         print("🚀 Running minimal experiment test")
+        return run_minimal_experiment_test(ideas_file, idea_idx)
     
     # Run tests
     tests = [
@@ -454,6 +613,8 @@ def main():
         print(f"   python launch_scientist_bfts.py --load_ideas {ideas_file} --idea_idx {idea_idx}")
         print("2. Or run minimal test experiment:")
         print(f"   python test_experiment.py --minimal {ideas_file} {idea_idx}")
+        print("3. Or run ultra-fast test experiment:")
+        print(f"   python test_experiment.py --ultra-fast {ideas_file} {idea_idx}")
     else:
         print(f"\n⚠️ {total - passed} tests failed. Fix these issues before running experiments.")
         return 1

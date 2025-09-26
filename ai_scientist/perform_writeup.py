@@ -173,6 +173,55 @@ def compile_latex(cwd, pdf_file, timeout=30):
         print(traceback.format_exc())
 
 
+def compile_latex_with_package_manager(cwd, pdf_file, timeout=30):
+    """
+    Enhanced LaTeX compilation using LaTeX Package Manager
+    Falls back to original compile_latex if package manager is not available
+    """
+    try:
+        from ai_scientist.utils.latex_helper import LaTeXPackageManager
+        
+        print("🔧 GENERATING LATEX WITH ENHANCED VALIDATION")
+        
+        template_file = os.path.join(cwd, "template.tex")
+        if not os.path.exists(template_file):
+            print(f"❌ LaTeX template not found: {template_file}")
+            return
+        
+        # Use the enhanced LaTeX package manager
+        manager = LaTeXPackageManager()
+        success, log_content = manager.compile_latex_with_validation(
+            template_file, 
+            max_attempts=3, 
+            auto_fix=True
+        )
+        
+        if success:
+            # Move the generated PDF to the target location
+            generated_pdf = os.path.join(cwd, "template.pdf")
+            if os.path.exists(generated_pdf):
+                try:
+                    shutil.move(generated_pdf, pdf_file)
+                    print("✅ LaTeX compilation successful with package manager!")
+                    return
+                except Exception as e:
+                    print(f"❌ Error moving PDF: {e}")
+            else:
+                print("❌ PDF file not found after successful compilation")
+        else:
+            print("❌ Package manager compilation failed, falling back to basic method")
+            print(f"Log excerpt: {log_content[-300:] if log_content else 'No log content'}")
+    
+    except ImportError:
+        print("⚠️  LaTeX Package Manager not available, using basic compilation")
+    except Exception as e:
+        print(f"⚠️  Package Manager error: {e}, falling back to basic compilation")
+    
+    # Fallback to original compile_latex
+    print("🔄 Falling back to original compilation method")
+    compile_latex(cwd, pdf_file, timeout)
+
+
 def detect_pages_before_impact(latex_folder, timeout=30):
     """
     Temporarily copy the latex folder, compile, and detect on which page
@@ -640,7 +689,7 @@ def perform_writeup(
                     f.write(content)
 
         if no_writing:
-            compile_latex(latex_folder, base_pdf_file + ".pdf")
+            compile_latex_with_package_manager(latex_folder, base_pdf_file + ".pdf")
             return osp.exists(base_pdf_file + ".pdf")
 
         # Run small model for citation additions
@@ -769,7 +818,7 @@ def perform_writeup(
             invalid_figs = used_figs - all_figs
 
             # Compile current version before reflection
-            compile_latex(latex_folder, base_pdf_file + f"_{compile_attempt}.pdf")
+            compile_latex_with_package_manager(latex_folder, base_pdf_file + f"_{compile_attempt}.pdf")
             compile_attempt += 1
             print(f"Compiled {base_pdf_file}_{compile_attempt}.pdf")
 
@@ -844,7 +893,7 @@ If you believe you are done, simply say: "I am done".
                     with open(writeup_file, "w") as fo:
                         fo.write(final_text)
 
-                    compile_latex(
+                    compile_latex_with_package_manager(
                         latex_folder, base_pdf_file + f"_{compile_attempt}.pdf"
                     )
                     compile_attempt += 1

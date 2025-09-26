@@ -1,0 +1,69 @@
+# ULTRA-FAST TEST CONFIGURATION - For pipeline validation only
+# This config runs the absolute minimum to test basic functionality
+
+data_dir: "data"
+preprocess_data: False
+
+goal: null
+eval: null
+
+log_dir: logs
+workspace_dir: workspaces
+copy_data: True
+
+exp_name: ultra_fast_test
+
+# ULTRA-SHORT TIMEOUTS
+exec:
+  timeout: 120 # 2 minutes maximum per execution
+  agent_file_name: runfile.py
+  format_tb_ipython: False
+
+generate_report: True
+report:
+  model: gpt-4o-2024-11-20
+  temp: 1.0
+
+experiment:
+  num_syn_datasets: 1
+
+debug:
+  stage4: False
+
+# ABSOLUTE MINIMUM AGENT SETTINGS
+agent:
+  type: parallel
+  num_workers: 1 # Single worker only
+  stages:
+    stage1_max_iters: 1 # Just 1 iteration per stage
+    stage2_max_iters: 1
+    stage3_max_iters: 1
+    stage4_max_iters: 1
+  steps: 1 # Single step only
+  k_fold_validation: 1
+  multi_seed_eval:
+    num_seeds: 1 # Single seed only
+  expose_prediction: False
+  data_preview: False
+
+  # LLM settings for coding
+  code:
+    model: claude-3-5-sonnet-20241022
+    temp: 1.0
+    max_tokens: 8000 # Reduced token limit
+
+  # LLM settings for evaluating program output / tracebacks
+  feedback:
+    model: gpt-4o-2024-11-20
+    temp: 0.5
+    max_tokens: 4000 # Reduced token limit
+
+  vlm_feedback:
+    model: gpt-4o-2024-11-20
+    temp: 0.5
+    max_tokens: null
+
+  search:
+    max_debug_depth: 1 # Single debug attempt
+    debug_prob: 0.2 # Low debug probability
+    num_drafts: 1 # Single draft only

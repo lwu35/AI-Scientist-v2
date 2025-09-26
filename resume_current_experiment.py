@@ -49,9 +49,49 @@ def find_pdf_path_for_review(idea_dir):
     
     return pdf_path
 
+def restore_corrupted_template(latex_dir, base_template_dir):
+    """Restore the corrupted template.tex from the base template"""
+    corrupted_template = os.path.join(latex_dir, "template.tex")
+    base_template = os.path.join(base_template_dir, "template.tex")
+    
+    if not os.path.exists(base_template):
+        print(f"❌ Base template not found at: {base_template}")
+        return False
+    
+    # Read the base template
+    with open(base_template, 'r') as f:
+        template_content = f.read()
+    
+    # Add siunitx package to fix \num and \SI commands
+    if '\\usepackage{siunitx}' not in template_content:
+        # Find the best place to insert siunitx (after amsmath packages)
+        lines = template_content.split('\n')
+        insert_idx = -1
+        for i, line in enumerate(lines):
+            if 'amsmath' in line or 'amsfonts' in line:
+                insert_idx = i + 1
+        
+        if insert_idx > 0:
+            lines.insert(insert_idx, '\\usepackage{siunitx}')
+            template_content = '\n'.join(lines)
+        else:
+            # Fallback: insert after documentclass
+            template_content = template_content.replace(
+                '\\documentclass{article}',
+                '\\documentclass{article}\n\\usepackage{siunitx}'
+            )
+    
+    # Write the restored template
+    with open(corrupted_template, 'w') as f:
+        f.write(template_content)
+    
+    print("✅ Restored corrupted template.tex with siunitx package")
+    return True
+
 def main():
-    # Your current experiment directory (the most recent one)
-    experiment_dir = "experiments/2025-09-24_18-43-46_multimodal_memory_augmentation_attempt_0"
+    # Target the specific failed experiment
+    experiment_dir = "experiments/2025-09-25_23-36-32_emotional_intelligence_llms_attempt_0"
+    base_template_dir = "ai_scientist/blank_icbinb_latex"
     
     if not os.path.exists(experiment_dir):
         print(f"Error: Experiment directory {experiment_dir} not found!")
@@ -77,7 +117,23 @@ def main():
     citations_file = os.path.join(experiment_dir, "cached_citations.bib")
     
     if os.path.exists(latex_dir):
-        print("✅ LaTeX files already exist - resuming from compilation step")
+        print("✅ LaTeX files already exist - checking for corruption...")
+        
+        # Check if template.tex is corrupted (missing \documentclass)
+        template_file = os.path.join(latex_dir, "template.tex")
+        if os.path.exists(template_file):
+            with open(template_file, 'r') as f:
+                template_content = f.read()
+            
+            if '\\documentclass' not in template_content:
+                print("🔧 Detected corrupted template.tex - restoring from base template...")
+                if not restore_corrupted_template(latex_dir, base_template_dir):
+                    print("❌ Failed to restore template")
+                    sys.exit(1)
+            else:
+                print("✅ Template appears intact")
+        
+        # Load existing citations
         citations_text = None
         if os.path.exists(citations_file):
             with open(citations_file, 'r') as f:
@@ -95,13 +151,13 @@ def main():
         citations_text = gather_citations(
             experiment_dir,
             num_cite_rounds=20,
-            small_model="gpt-4o-2024-05-13",  # Match your original parameters
+            small_model="gpt-4o-2024-11-20",
         )
     
-    # Fix bibliography reference and other template issues
+    # Additional template fixes
     latex_file = os.path.join(experiment_dir, "latex", "template.tex")
     if os.path.exists(latex_file):
-        print("🔧 Checking template issues...")
+        print("🔧 Applying additional template fixes...")
         with open(latex_file, 'r') as f:
             content = f.read()
         
@@ -117,14 +173,25 @@ def main():
             content = content.replace('\\usepackage{iclr2025_conference}', '\\usepackage{iclr2025}')
             fixes_applied.append("conference style file")
         
+        # Ensure siunitx package is present
+        if '\\usepackage{siunitx}' not in content:
+            # Find the best place to insert siunitx
+            if '\\usepackage{amsmath}' in content:
+                content = content.replace('\\usepackage{amsmath}', '\\usepackage{amsmath}\n\\usepackage{siunitx}')
+                fixes_applied.append("siunitx package")
+            elif '\\documentclass{article}' in content:
+                content = content.replace('\\documentclass{article}', '\\documentclass{article}\n\\usepackage{siunitx}')
+                fixes_applied.append("siunitx package")
+        
         # Add missing caption package if needed
         if '\\captionof' in content and '\\usepackage{caption}' not in content:
             # Find last usepackage line and insert after it
             lines = content.split('\n')
+            last_usepackage_idx = -1
             for i, line in enumerate(lines):
                 if line.strip().startswith('\\usepackage'):
                     last_usepackage_idx = i
-            if 'last_usepackage_idx' in locals():
+            if last_usepackage_idx >= 0:
                 lines.insert(last_usepackage_idx + 1, '\\usepackage{caption}')
                 content = '\n'.join(lines)
                 fixes_applied.append("caption package")
@@ -136,12 +203,18 @@ def main():
         else:
             print("✅ Template already correct")
 
-    # Perform writeup (this will use existing LaTeX files if they exist)
+    # Remove the corrupted final reflection PDF that's causing issues
+    corrupted_pdf = os.path.join(experiment_dir, "2025-09-25_23-36-32_emotional_intelligence_llms_attempt_0_reflection_final_page_limit.pdf")
+    if os.path.exists(corrupted_pdf):
+        os.remove(corrupted_pdf)
+        print("🗑️ Removed corrupted final reflection PDF")
+
+    # Perform writeup (this will regenerate the PDF properly)
     print("📝 Starting/resuming writeup...")
     success = perform_writeup(
         base_folder=experiment_dir,
         citations_text=citations_text,
-        big_model="o1",  # Match your original parameters
+        big_model="gpt-4o-2024-11-20",
         page_limit=4,
     )
     
@@ -157,18 +230,22 @@ def main():
             print("🔍 Starting paper review...")
             pdf_path = find_pdf_path_for_review(experiment_dir)
             if pdf_path and os.path.exists(pdf_path):
-                print(f"📄 Reviewing paper at: {pdf_path}")
-                paper_content = load_paper(pdf_path)
-                client, client_model = create_client("gpt-4o-2024-05-13")  # Match your original parameters
-                review_text = perform_review(paper_content, client_model, client)
-                review_img_cap_ref = perform_imgs_cap_ref_review(
-                    client, client_model, pdf_path
-                )
-                with open(osp.join(experiment_dir, "review_text.txt"), "w") as f:
-                    f.write(json.dumps(review_text, indent=4))
-                with open(osp.join(experiment_dir, "review_img_cap_ref.json"), "w") as f:
-                    json.dump(review_img_cap_ref, f, indent=4)
-                print("✅ Paper review completed!")
+                try:
+                    print(f"📄 Reviewing paper at: {pdf_path}")
+                    paper_content = load_paper(pdf_path)
+                    client, client_model = create_client("gpt-4o-2024-11-20")
+                    review_text = perform_review(paper_content, client_model, client)
+                    review_img_cap_ref = perform_imgs_cap_ref_review(
+                        client, client_model, pdf_path
+                    )
+                    with open(osp.join(experiment_dir, "review_text.txt"), "w") as f:
+                        f.write(json.dumps(review_text, indent=4))
+                    with open(osp.join(experiment_dir, "review_img_cap_ref.json"), "w") as f:
+                        json.dump(review_img_cap_ref, f, indent=4)
+                    print("✅ Paper review completed!")
+                except Exception as e:
+                    print(f"⚠️ Review failed: {e}")
+                    print("📄 But PDF was generated successfully!")
             else:
                 print("⚠️ Could not find PDF for review")
         else:

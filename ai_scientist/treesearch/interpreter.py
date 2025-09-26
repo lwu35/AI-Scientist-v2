@@ -196,19 +196,39 @@ class Interpreter:
     def cleanup_session(self):
         if self.process is None:
             return
-        # give the child process a chance to terminate gracefully
-        self.process.terminate()
-        self._drain_queues()
-        self.process.join(timeout=2)
-        # kill the child process if it's still alive
-        if self.process.exitcode is None:
-            logger.warning("Child process failed to terminate gracefully, killing it..")
-            self.process.kill()
-            self._drain_queues()
-            self.process.join(timeout=2)
-        # don't wait for gc, clean up immediately
-        self.process.close()
-        self.process = None  # type: ignore
+        
+        try:
+            # Check if process is still running before attempting cleanup
+            if self.process.is_alive():
+                # give the child process a chance to terminate gracefully
+                self.process.terminate()
+                self._drain_queues()
+                self.process.join(timeout=2)
+                
+                # kill the child process if it's still alive
+                if self.process.is_alive():
+                    logger.warning("Child process failed to terminate gracefully, killing it..")
+                    self.process.kill()
+                    self._drain_queues()
+                    self.process.join(timeout=2)
+            
+            # Only close if the process has actually terminated
+            if not self.process.is_alive():
+                self.process.close()
+            else:
+                logger.error("Process still alive after kill attempt, skipping close()")
+                
+        except Exception as e:
+            logger.error(f"Error during process cleanup: {e}")
+            # Try to force kill if everything else fails
+            try:
+                if self.process.is_alive():
+                    self.process.kill()
+                    self.process.join(timeout=1)
+            except:
+                pass
+        finally:
+            self.process = None  # type: ignore
 
     def run(self, code: str, reset_session=True) -> ExecutionResult:
         """

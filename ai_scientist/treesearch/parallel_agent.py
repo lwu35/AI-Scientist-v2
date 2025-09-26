@@ -1191,6 +1191,11 @@ class ParallelAgent:
             "tried_hyperparams": set(),
         }
 
+    def __del__(self):
+        """Ensure cleanup happens when object is destroyed"""
+        if not self._is_shutdown:
+            self.cleanup()
+
     def _define_global_metrics(self) -> str:
         """Define eval metric to be used across all experiments"""
         prompt = {
@@ -2326,34 +2331,61 @@ class ParallelAgent:
 
     def cleanup(self):
         """Cleanup parallel workers and resources"""
-        if not self._is_shutdown:
-            print("Shutting down parallel executor...")
+        if self._is_shutdown:
+            return
+            
+        print("Shutting down parallel executor...")
+        self._is_shutdown = True
+        
+        try:
+            # Release all GPUs first
+            if self.gpu_manager is not None:
+                for process_id in list(self.gpu_manager.gpu_assignments.keys()):
+                    self.gpu_manager.release_gpu(process_id)
+
+            # Graceful shutdown with timeout
             try:
-                # Release all GPUs
-                if self.gpu_manager is not None:
-                    for process_id in list(self.gpu_manager.gpu_assignments.keys()):
-                        self.gpu_manager.release_gpu(process_id)
-
-                # Shutdown executor first
-                self.executor.shutdown(wait=False, cancel_futures=True)
-
-                # Force terminate all worker processes
-                if self.executor._processes:
-                    ## Get copy of processes
-                    processes = list(self.executor._processes.values())
-
-                    # Then terminate processes if they're still alive
-                    for process in processes:
-                        if process.is_alive():
-                            process.terminate()
-                            process.join(timeout=1)
-
-                print("Executor shutdown complete")
-
+                self.executor.shutdown(wait=True, cancel_futures=True, timeout=5)
+                print("Executor graceful shutdown completed")
             except Exception as e:
-                print(f"Error during executor shutdown: {e}")
-            finally:
-                self._is_shutdown = True
+                print(f"Graceful shutdown failed: {e}, attempting force shutdown...")
+                
+                # Force shutdown if graceful fails
+                try:
+                    self.executor.shutdown(wait=False, cancel_futures=True)
+                except:
+                    pass
+                
+                # Force terminate all worker processes if they still exist
+                try:
+                    if hasattr(self.executor, '_processes') and self.executor._processes:
+                        processes = list(self.executor._processes.values())
+                        
+                        for process in processes:
+                            try:
+                                if process.is_alive():
+                                    print(f"Force terminating process {process.pid}")
+                                    process.terminate()
+                                    process.join(timeout=2)
+                                    
+                                    # Kill if still alive
+                                    if process.is_alive():
+                                        process.kill()
+                                        process.join(timeout=1)
+                                        
+                            except Exception as proc_e:
+                                print(f"Error terminating process: {proc_e}")
+                                continue
+                                
+                except Exception as cleanup_e:
+                    print(f"Error during process cleanup: {cleanup_e}")
+
+            print("Executor shutdown complete")
+
+        except Exception as e:
+            print(f"Error during executor shutdown: {e}")
+            import traceback
+            traceback.print_exc()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.cleanup()

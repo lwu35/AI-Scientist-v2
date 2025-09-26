@@ -29,6 +29,15 @@ from ai_scientist.perform_vlm_review import (
 )
 from ai_scientist.vlm import create_client as create_vlm_client
 
+# Import our LaTeX package manager
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+try:
+    from ai_scientist.utils.latex_helper import LaTeXPackageManager
+except ImportError:
+    LaTeXPackageManager = None
+    print("⚠️  LaTeX package manager not available - falling back to basic compilation")
+
 
 def remove_accents_and_clean(s):
     # Normalize to separate accents
@@ -42,7 +51,38 @@ def remove_accents_and_clean(s):
     return ascii_str
 
 
-def compile_latex(cwd, pdf_file, timeout=30):
+def compile_latex_with_package_manager(cwd, pdf_file, timeout=30):
+    """Enhanced LaTeX compilation with automatic package management"""
+    print("🔧 GENERATING LATEX WITH PACKAGE MANAGER")
+    
+    template_file = os.path.join(cwd, "template.tex")
+    
+    if LaTeXPackageManager is not None:
+        # Use advanced package manager with validation
+        manager = LaTeXPackageManager()
+        success, log_content = manager.compile_latex_with_validation(template_file, max_attempts=3, auto_fix=True)
+        
+        if success:
+            try:
+                shutil.move(osp.join(cwd, "template.pdf"), pdf_file)
+                print("✅ LaTeX compilation successful with package manager!")
+                return
+            except FileNotFoundError:
+                print("❌ PDF file not found after successful compilation")
+        else:
+            print("❌ Package manager compilation failed, falling back to basic method")
+            print(f"Log: {log_content[:500]}")
+    
+    # Fallback to original method
+    compile_latex_basic(cwd, pdf_file, timeout)
+
+
+def compile_latex_basic(cwd, pdf_file, timeout=30):
+    """Original LaTeX compilation method (fallback)"""
+    return compile_latex_original(cwd, pdf_file, timeout)
+
+
+def compile_latex_original(cwd, pdf_file, timeout=30):
     print("GENERATING LATEX")
 
     # PERMANENT FIX: Clean up stale bibliography files and ensure proper document structure
@@ -212,6 +252,16 @@ def compile_latex(cwd, pdf_file, timeout=30):
         print("Failed to rename PDF.")
         print("EXCEPTION in compile_latex while moving PDF:")
         print(traceback.format_exc())
+
+
+def compile_latex(cwd, pdf_file, timeout=30):
+    """Main LaTeX compilation function - uses package manager if available"""
+    try:
+        compile_latex_with_package_manager(cwd, pdf_file, timeout)
+    except Exception as e:
+        print(f"❌ Enhanced compilation failed: {e}")
+        print("🔄 Falling back to original compilation method...")
+        compile_latex_original(cwd, pdf_file, timeout)
 
 
 def is_header_or_footer(line):
@@ -1055,7 +1105,7 @@ def perform_writeup(
                     f.write(content)
 
         if no_writing:
-            compile_latex(latex_folder, pdf_file)
+            compile_latex_with_package_manager(latex_folder, pdf_file)
             return osp.exists(pdf_file)
 
         # If no citations provided, try to load from cache first
@@ -1169,7 +1219,7 @@ def perform_writeup(
             )
             # Compile current version before reflection
             print(f"[green]Compiling PDF for reflection {i+1}...[/green]")
-            compile_latex(latex_folder, reflection_pdf)
+            compile_latex_with_package_manager(latex_folder, reflection_pdf)
 
             review_img_cap_ref = perform_imgs_cap_ref_review(
                 vlm_client, vlm_model, reflection_pdf
@@ -1251,7 +1301,7 @@ Ensure proper citation usage:
                     with open(writeup_file, "w") as fo:
                         fo.write(final_text)
 
-                    compile_latex(latex_folder, reflection_pdf)
+                    compile_latex_with_package_manager(latex_folder, reflection_pdf)
                 else:
                     print(f"No changes in reflection step {i+1}.")
                     break
@@ -1318,7 +1368,7 @@ If you believe you are done with reflection, simply say: "I am done"."""
                     with open(writeup_file, "w") as fo:
                         fo.write(final_text)
 
-                    compile_latex(latex_folder, reflection_pdf)
+                    compile_latex_with_package_manager(latex_folder, reflection_pdf)
                 else:
                     print(f"No changes in reflection step {i+1}.")
                     break
@@ -1331,17 +1381,111 @@ If you believe you are done with reflection, simply say: "I am done"."""
 
         # Get new reflection_page_info
         reflection_page_info = get_reflection_page_info(reflection_pdf, page_limit)
+        
+        print(f"🔍 DEBUG: Page analysis results:")
+        print(f"   {reflection_page_info.strip()}")
 
-        final_reflection_prompt = """{reflection_page_info}
-USE MINIMAL EDITS TO OPTIMIZE THE PAGE LIMIT USAGE."""
+        # Read current LaTeX content to include in prompt
+        with open(writeup_file, "r") as f:
+            current_latex = f.read()
+
+        final_reflection_prompt = f"""{reflection_page_info}
+
+TASK: Optimize the existing LaTeX document to better fit the {page_limit}-page limit while maintaining scientific rigor and clarity.
+
+CURRENT LATEX DOCUMENT:
+```latex
+{current_latex}
+```
+
+CRITICAL CONSTRAINTS:
+- **DO NOT change the document class, packages, or LaTeX structure**
+- **DO NOT rewrite from scratch - only edit the existing content**
+- **PRESERVE all \\usepackage commands, \\documentclass, and formatting**
+- **KEEP the same bibliography style and citation format**
+- **MAINTAIN existing figure references and paths**
+
+CONTENT OPTIMIZATIONS TO MAKE:
+1. **Text Reduction**: 
+   - Remove redundant sentences and verbose phrasing
+   - Combine related paragraphs for better flow
+   - Use more concise wording without losing meaning
+2. **Figure Optimization**: 
+   - Reduce figure sizes (e.g., change width=0.8\\textwidth to width=0.6\\textwidth)
+   - Shorten figure captions while keeping essential information
+   - Consider removing less critical figures if severely over page limit
+3. **Section Streamlining**: 
+   - Merge short subsections that cover related topics
+   - Shorten less critical sections (background, related work)
+   - Focus content on key contributions and results
+4. **Reference Cleanup**: Remove citations that aren't essential to the main arguments
+
+EDITING APPROACH:
+- Start with the EXISTING LaTeX document
+- Make targeted cuts and improvements to reduce length
+- Preserve all scientific accuracy and key insights
+- Keep the document structure and formatting intact
+
+REQUIREMENTS:
+- Return the complete optimized LaTeX document in a ```latex code block
+- The output should be recognizably the same document, just shorter and more concise
+- All LaTeX commands, packages, and structure must remain the same
+- Only the content (text, some figures) should be optimized
+
+Please provide the optimized version of the existing LaTeX document:"""
+        
+        print(f"🔍 DEBUG: Final reflection prompt:")
+        print(f"   {final_reflection_prompt.strip()}")
+        
+        # Specialized system message for page limit optimization
+        optimization_system_message = f"""You are an expert LaTeX editor specializing in content optimization for academic papers.
+
+Your task is to shorten an existing {page_limit}-page ICBINB workshop paper by editing its content, NOT by rewriting or restructuring the LaTeX.
+
+CRITICAL EDITING RULES:
+- You are editing an EXISTING document - do not start from scratch
+- NEVER change \\documentclass, \\usepackage commands, or LaTeX structure
+- NEVER introduce new packages or document classes
+- PRESERVE all LaTeX formatting, commands, and bibliography style
+- Keep the same section structure and figure numbering
+
+CONTENT EDITING EXPERTISE:
+- Remove verbose and redundant phrasing while preserving meaning
+- Shorten paragraphs by combining sentences and removing filler words
+- Trim less essential background and related work sections
+- Reduce figure sizes and shorten captions
+- Remove non-critical citations and references
+
+OPTIMIZATION APPROACH:
+- Start with the provided LaTeX document exactly as it is
+- Make targeted edits to reduce text length
+- Focus on removing content that doesn't impact the core contributions
+- Maintain all key experimental results and scientific insights
+- Preserve the document's structure and academic tone
+
+TECHNICAL CONSTRAINTS:
+- Output must be valid LaTeX that compiles with existing packages
+- All figure paths and references must remain functional
+- Bibliography format and citation style must be unchanged
+- Document class and all package imports must be identical
+
+Your goal is to produce a shorter version of the SAME document, not a different document."""
+
         reflection_response, msg_history = get_response_from_llm(
             prompt=final_reflection_prompt,
             client=big_client,
             model=big_client_model,
-            system_message=big_model_system_message,
+            system_message=optimization_system_message,
             msg_history=msg_history[-1:],
             print_debug=False,
         )
+        
+        print(f"🔍 DEBUG: LLM response length: {len(reflection_response)} characters")
+        print(f"🔍 DEBUG: LLM response preview (first 500 chars):")
+        print(f"   {reflection_response[:500]}")
+        if len(reflection_response) > 500:
+            print(f"🔍 DEBUG: LLM response preview (last 500 chars):")
+            print(f"   {reflection_response[-500:]}")
 
         reflection_pdf = osp.join(
             base_folder, f"{osp.basename(base_folder)}_reflection_final_page_limit.pdf"
@@ -1354,14 +1498,24 @@ USE MINIMAL EDITS TO OPTIMIZE THE PAGE LIMIT USAGE."""
         reflection_code_match = re.search(
             r"```latex(.*?)```", reflection_response, re.DOTALL
         )
+        
+        print(f"🔍 DEBUG: LaTeX code block search:")
         if reflection_code_match:
             reflected_latex_code = reflection_code_match.group(1).strip()
-            if reflected_latex_code != current_latex:
+            print(f"   ✅ Found LaTeX code block ({len(reflected_latex_code)} characters)")
+            print(f"   🔍 LaTeX code preview (first 200 chars): {reflected_latex_code[:200]}")
+            
+            # Compare with current LaTeX
+            latex_identical = (reflected_latex_code == current_latex)
+            print(f"   🔍 LaTeX identical to current version: {latex_identical}")
+            
+            if not latex_identical:
+                print(f"   🔧 Applying LaTeX changes and compiling final page limit PDF...")
                 final_text = reflected_latex_code
                 cleanup_map = {
                     "</end": r"\\end",
                     "</begin": r"\\begin",
-                    "’": "'",
+                    "'": "'",
                 }
                 for bad_str, repl_str in cleanup_map.items():
                     final_text = final_text.replace(bad_str, repl_str)
@@ -1370,11 +1524,45 @@ USE MINIMAL EDITS TO OPTIMIZE THE PAGE LIMIT USAGE."""
                 with open(writeup_file, "w") as fo:
                     fo.write(final_text)
 
-                compile_latex(latex_folder, reflection_pdf)
+                compile_latex_with_package_manager(latex_folder, reflection_pdf)
             else:
-                print(f"No changes in reflection page step.")
+                print(f"   ⚠️  No changes in reflection page step - LaTeX identical.")
+                print(f"   🔧 Compiling current version for final page limit PDF...")
+                # Still need to compile the current version for final page limit PDF
+                compile_latex_with_package_manager(latex_folder, reflection_pdf)
+        else:
+            print(f"   ❌ No LaTeX code block found in final page limit response.")
+            print(f"   🔍 Searching for alternative patterns...")
+            
+            # Check for other possible LaTeX patterns
+            alt_patterns = [
+                r"```(.*?)```",  # Any code block
+                r"\\documentclass",  # LaTeX document start
+                r"\\begin\{document\}",  # Document begin
+            ]
+            
+            for i, pattern in enumerate(alt_patterns):
+                alt_match = re.search(pattern, reflection_response, re.DOTALL)
+                if alt_match:
+                    print(f"   🔍 Found alternative pattern {i+1}: {pattern}")
+                    print(f"      Preview: {alt_match.group(0)[:100]}")
+                else:
+                    print(f"   ❌ No match for pattern {i+1}: {pattern}")
+            
+            print(f"   🔧 Using current version and compiling final page limit PDF...")
+            # No LaTeX code found, compile the current version
+            compile_latex_with_package_manager(latex_folder, reflection_pdf)
 
-        return osp.exists(reflection_pdf)
+        # Final result logging
+        pdf_exists = osp.exists(reflection_pdf)
+        print(f"🔍 DEBUG: Final page limit PDF result:")
+        print(f"   📄 PDF path: {reflection_pdf}")
+        print(f"   ✅ PDF exists: {pdf_exists}")
+        if pdf_exists:
+            pdf_size = os.path.getsize(reflection_pdf)
+            print(f"   📊 PDF size: {pdf_size} bytes ({pdf_size/1024:.1f} KB)")
+        
+        return pdf_exists
 
     except Exception:
         print("EXCEPTION in perform_writeup:")
