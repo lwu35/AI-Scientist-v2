@@ -72,21 +72,21 @@ def edit_bfts_config_file(config_path: str, idea_dir: str, idea_path: str, gpu_i
     os.makedirs(log_dir, exist_ok=True)
     config["log_dir"] = log_dir
 
-    # Add GPU information if provided
+    # Adjust num_workers based on GPU availability (without adding gpu key to config)
     if gpu_info is not None:
-        if "gpu" not in config:
-            config["gpu"] = {}
-        config["gpu"]["available_gpus"] = gpu_info.get("available_gpus", [])
-        config["gpu"]["force_cpu"] = gpu_info.get("force_cpu", False)
-        config["gpu"]["cuda_visible_devices"] = gpu_info.get("cuda_visible_devices", "")
+        available_gpus = gpu_info.get("available_gpus", [])
+        force_cpu = gpu_info.get("force_cpu", False)
         
-        # Adjust num_workers based on GPU availability
-        if gpu_info.get("available_gpus") and not gpu_info.get("force_cpu", False):
-            num_gpus = len(gpu_info["available_gpus"])
+        if available_gpus and not force_cpu:
+            num_gpus = len(available_gpus)
             if "agent" in config and num_gpus > 0:
                 original_workers = config["agent"].get("num_workers", 4)
                 config["agent"]["num_workers"] = min(original_workers, num_gpus)
                 print(f"🎮 Adjusted num_workers to {config['agent']['num_workers']} to match {num_gpus} available GPUs")
+        elif force_cpu:
+            print("🖥️  Force CPU mode - using default num_workers configuration")
+        else:
+            print("🖥️  No GPUs detected - using default num_workers configuration")
 
     with open(run_config_path, "w") as f:
         yaml.dump(config, f)

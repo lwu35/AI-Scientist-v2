@@ -23,7 +23,7 @@ def debug_launch_scientist():
         "--writeup-type", "icbinb",
         "--skip_writeup",
         "--skip_review", 
-        "--attempt_id", "debug_test",
+        "--attempt_id", "999",
         "--force_cpu"
     ]
     

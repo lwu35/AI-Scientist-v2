@@ -301,7 +301,7 @@ def test_launch_scientist_gpu_allocation():
             "--writeup-type", "icbinb",
             "--skip_writeup",  # Skip writeup to focus on GPU allocation
             "--skip_review",   # Skip review to focus on GPU allocation
-            "--attempt_id", "gpu_test"
+            "--attempt_id", "999"
         ]
         
         if config["gpu_ids"]:
